@@ -1,44 +1,52 @@
 -- ============================================================
 -- Kalbu — Full-Stack Database Schema & pgvector Migration
--- Tables: users, encrypted_diary_entries, emotion_vectors,
---         matching_pool, music_mapping
+-- Run this script in your Supabase Dashboard -> SQL Editor
 -- ============================================================
 
 -- 1. Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "vector";
 
--- 2. Custom Enums
-CREATE TYPE emotion_label AS ENUM (
-  'sadness', 'joy', 'love', 'anger', 'fear', 'surprise'
-);
+-- 2. Custom Enums (Safe creation)
+DO $$ BEGIN
+  CREATE TYPE emotion_label AS ENUM (
+    'sadness', 'joy', 'love', 'anger', 'fear', 'surprise'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TYPE match_status AS ENUM (
-  'searching', 'matched', 'expired', 'cancelled'
-);
+DO $$ BEGIN
+  CREATE TYPE match_status AS ENUM (
+    'searching', 'matched', 'expired', 'cancelled'
+  );
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
 
 -- ============================================================
--- TABLE 1: users (Public Profile & Zero-Knowledge Key Metadata)
+-- TABLE 1: kalbu_users (Registered Users & Email Verification)
+-- Every friend/user who registers appears directly in this table!
 -- ============================================================
-CREATE TABLE public.users (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  anonymous_handle TEXT NOT NULL UNIQUE,
-  avatar_seed TEXT NOT NULL DEFAULT encode(gen_random_bytes(8), 'hex'),
-  encryption_salt TEXT NOT NULL,
-  key_check_cipher TEXT NOT NULL,
-  key_check_iv TEXT NOT NULL,
-  preferred_music_principle TEXT NOT NULL DEFAULT 'iso'
-    CHECK (preferred_music_principle IN ('iso', 'compensatory')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS public.kalbu_users (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  anonymous_handle TEXT NOT NULL,
+  agreed_to_terms BOOLEAN NOT NULL DEFAULT true,
+  agreed_to_terms_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  email_verified BOOLEAN NOT NULL DEFAULT false,
+  email_verified_at TIMESTAMPTZ,
+  verification_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================
 -- TABLE 2: encrypted_diary_entries (Zero-Knowledge AES-GCM-256)
 -- ============================================================
-CREATE TABLE public.encrypted_diary_entries (
+CREATE TABLE IF NOT EXISTS public.encrypted_diary_entries (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
   ciphertext TEXT NOT NULL,
   iv TEXT NOT NULL,
   auth_tag TEXT,
@@ -47,16 +55,16 @@ CREATE TABLE public.encrypted_diary_entries (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_diary_user_recorded
+CREATE INDEX IF NOT EXISTS idx_diary_user_recorded
   ON public.encrypted_diary_entries(user_id, recorded_at DESC);
 
 -- ============================================================
 -- TABLE 3: emotion_vectors (Russell's Circumplex & 6D Vector)
 -- ============================================================
-CREATE TABLE public.emotion_vectors (
+CREATE TABLE IF NOT EXISTS public.emotion_vectors (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   entry_id UUID NOT NULL UNIQUE REFERENCES public.encrypted_diary_entries(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
   primary_emotion emotion_label NOT NULL,
   confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
   valence REAL NOT NULL CHECK (valence >= -1.0 AND valence <= 1.0),
@@ -73,34 +81,34 @@ CREATE TABLE public.emotion_vectors (
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_emotion_user_date
+CREATE INDEX IF NOT EXISTS idx_emotion_user_date
   ON public.emotion_vectors(user_id, recorded_at DESC);
 
 -- ============================================================
 -- TABLE 4: matching_pool ("Feeling Twin" Real-Time Queue)
 -- ============================================================
-CREATE TABLE public.matching_pool (
+CREATE TABLE IF NOT EXISTS public.matching_pool (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL UNIQUE REFERENCES public.users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL UNIQUE,
   emotion_vector_id UUID NOT NULL REFERENCES public.emotion_vectors(id) ON DELETE CASCADE,
   emotion_probs vector(6) NOT NULL,
   valence REAL NOT NULL,
   arousal REAL NOT NULL,
   primary_emotion emotion_label NOT NULL,
   status match_status NOT NULL DEFAULT 'searching',
-  matched_with_user_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
+  matched_with_user_id UUID,
   room_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '15 minutes')
 );
 
-CREATE INDEX idx_matching_pool_vector
+CREATE INDEX IF NOT EXISTS idx_matching_pool_vector
   ON public.matching_pool USING hnsw (emotion_probs vector_cosine_ops);
 
 -- ============================================================
 -- TABLE 5: music_mapping (ISO Principle Music Therapy Catalog)
 -- ============================================================
-CREATE TABLE public.music_mapping (
+CREATE TABLE IF NOT EXISTS public.music_mapping (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   title TEXT NOT NULL,
   artist TEXT NOT NULL,
@@ -117,6 +125,35 @@ CREATE TABLE public.music_mapping (
 );
 
 -- ============================================================
+-- TABLE 6: banned_words_registry (18+ / Explicit Terms Database)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.banned_words_registry (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  banned_term TEXT NOT NULL UNIQUE,
+  category TEXT NOT NULL DEFAULT '18+_sexual_explicit',
+  auto_added_from_violation BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- TABLE 7: restricted_incident_logs (18+ Violation Backup DB)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.restricted_incident_logs (
+  incident_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  ip_address TEXT NOT NULL,
+  user_agent TEXT NOT NULL,
+  strike_number INTEGER NOT NULL CHECK (strike_number >= 1),
+  action_taken TEXT NOT NULL CHECK (
+    action_taken IN ('STRIKE_1_FINAL_WARNING_ISSUED', 'STRIKE_2_PERMANENT_ACCOUNT_BAN')
+  ),
+  flagged_keywords TEXT[] NOT NULL DEFAULT '{}',
+  raw_title TEXT,
+  raw_content TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
 -- RPC FUNCTION: Find "Feeling Twin" via Cosine Similarity
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.find_feeling_twin(
@@ -124,7 +161,7 @@ CREATE OR REPLACE FUNCTION public.find_feeling_twin(
   p_query_vector vector(6),
   p_valence REAL,
   p_arousal REAL,
-  p_similarity_threshold REAL DEFAULT 0.92
+  p_similarity_threshold REAL DEFAULT 0.75
 )
 RETURNS TABLE (
   twin_pool_id UUID,
@@ -155,68 +192,40 @@ END;
 $$;
 
 -- ============================================================
--- ROW LEVEL SECURITY (RLS) POLICIES
+-- ROW LEVEL SECURITY (RLS) POLICIES FOR KALBU APP ACCESS
 -- ============================================================
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.kalbu_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.encrypted_diary_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.emotion_vectors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.matching_pool ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.music_mapping ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.banned_words_registry ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.restricted_incident_logs ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users manage own profile" ON public.users
-  FOR ALL USING (auth.uid() = id);
+DROP POLICY IF EXISTS "Allow app access to kalbu_users" ON public.kalbu_users;
+CREATE POLICY "Allow app access to kalbu_users" ON public.kalbu_users
+  FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY "Users manage own encrypted entries" ON public.encrypted_diary_entries
-  FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Allow app access to encrypted_diary_entries" ON public.encrypted_diary_entries;
+CREATE POLICY "Allow app access to encrypted_diary_entries" ON public.encrypted_diary_entries
+  FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY "Users manage own emotion vectors" ON public.emotion_vectors
-  FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Allow app access to emotion_vectors" ON public.emotion_vectors;
+CREATE POLICY "Allow app access to emotion_vectors" ON public.emotion_vectors
+  FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY "Users manage own matching pool state" ON public.matching_pool
-  FOR ALL USING (auth.uid() = user_id OR auth.uid() = matched_with_user_id);
+DROP POLICY IF EXISTS "Allow app access to matching_pool" ON public.matching_pool;
+CREATE POLICY "Allow app access to matching_pool" ON public.matching_pool
+  FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY "Anyone authenticated can read music catalog" ON public.music_mapping
-  FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow app access to music_mapping" ON public.music_mapping;
+CREATE POLICY "Allow app access to music_mapping" ON public.music_mapping
+  FOR ALL USING (true) WITH CHECK (true);
 
--- ============================================================
--- SEED DATA: ISO Principle Therapeutic Soundtracks
--- ============================================================
-INSERT INTO public.music_mapping
-  (title, artist, audio_url, target_emotion, valence_min, valence_max, arousal_min, arousal_max, therapeutic_stage, bpm, tags)
-VALUES
-  ('Rain on Quiet Glass (ISO Stage 1: Mirror)', 'Kalbu Sound Lab', '/audio/rain-glass.mp3', 'sadness', -1.0, -0.3, -1.0, -0.2, 1, 58, ARRAY['ambient', 'rain', 'iso-mirror']),
-  ('Warm Cello Horizon (ISO Stage 2: Bridge)', 'Kalbu Sound Lab', '/audio/cello-horizon.mp3', 'sadness', -0.4, 0.2, -0.6, 0.0, 2, 66, ARRAY['cello', 'warm', 'iso-bridge']),
-  ('First Morning Light (ISO Stage 3: Uplift)', 'Kalbu Sound Lab', '/audio/morning-light.mp3', 'joy', 0.2, 1.0, -0.2, 0.5, 3, 76, ARRAY['piano', 'serene', 'iso-uplift']),
-  ('Beta-to-Alpha Grounding Pulse', 'Kalbu Sound Lab', '/audio/alpha-grounding.mp3', 'fear', -1.0, -0.2, 0.3, 1.0, 1, 84, ARRAY['binaural', 'grounding', 'anxiolytic']),
-  ('Deep Cedar Breathwork', 'Kalbu Sound Lab', '/audio/cedar-breath.mp3', 'anger', -1.0, -0.2, 0.4, 1.0, 2, 62, ARRAY['slow-tempo', 'de-escalation', 'nature']),
-  ('Golden Hour Lo-Fi Study', 'Kalbu Sound Lab', '/audio/golden-hour.mp3', 'love', 0.3, 1.0, -0.3, 0.4, 1, 72, ARRAY['lofi', 'warmth', 'focus']);
+DROP POLICY IF EXISTS "Allow app access to banned_words_registry" ON public.banned_words_registry;
+CREATE POLICY "Allow app access to banned_words_registry" ON public.banned_words_registry
+  FOR ALL USING (true) WITH CHECK (true);
 
--- ============================================================
--- TABLE 6: banned_words_registry (18+ / Explicit Terms Database)
--- ============================================================
-CREATE TABLE IF NOT EXISTS public.banned_words_registry (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  banned_term TEXT NOT NULL UNIQUE,
-  category TEXT NOT NULL DEFAULT '18+_sexual_explicit',
-  auto_added_from_violation BOOLEAN NOT NULL DEFAULT false,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- ============================================================
--- TABLE 7: restricted_incident_logs (Forensic & Police Backup DB)
--- ============================================================
-CREATE TABLE IF NOT EXISTS public.restricted_incident_logs (
-  incident_id TEXT PRIMARY KEY,
-  user_id UUID NOT NULL,
-  ip_address TEXT NOT NULL,
-  user_agent TEXT NOT NULL,
-  strike_number INTEGER NOT NULL CHECK (strike_number >= 1),
-  action_taken TEXT NOT NULL CHECK (
-    action_taken IN ('STRIKE_1_FINAL_WARNING_ISSUED', 'STRIKE_2_PERMANENT_ACCOUNT_BAN')
-  ),
-  flagged_keywords TEXT[] NOT NULL DEFAULT '{}',
-  raw_title TEXT,
-  raw_content TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
+DROP POLICY IF EXISTS "Allow app access to restricted_incident_logs" ON public.restricted_incident_logs;
+CREATE POLICY "Allow app access to restricted_incident_logs" ON public.restricted_incident_logs
+  FOR ALL USING (true) WITH CHECK (true);

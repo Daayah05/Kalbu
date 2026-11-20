@@ -30,8 +30,201 @@ interface KnowledgeTopic {
   id: string;
   category: string;
   keywords: string[];
-  buildAnswer: (isMalay: boolean, mood?: ChatMessageInput["currentMood"]) => string;
+  buildAnswer: (
+    isMalay: boolean,
+    mood?: ChatMessageInput["currentMood"]
+  ) => string;
   followUps: (isMalay: boolean) => string[];
+}
+
+function buildKalbuSystemPrompt(
+  currentMood?: ChatMessageInput["currentMood"]
+): string {
+  return `You are "Kalbu AI Companion", the warm, empathetic assistant for the Kalbu web application ("Digital Diary & Emotional Safe Haven").
+CRITICAL STYLE RULES:
+1. NEVER explain things using complicated mathematical formulas, equations, vectors, or heavy cryptographic jargon. Users just want to understand the main concept in simple, everyday, comforting language.
+2. Reply in the same language the user uses (Bahasa Melayu, English, or casual Manglish).
+3. Keep answers clear, friendly, and concise (around 3-6 short bullet points or 2 short paragraphs).
+
+KEY FACTS ABOUT KALBU WEBSITE:
+- Main Purpose: A private digital diary and emotional safe-haven for students and young adults dealing with stress, burnout, and emotional fatigue.
+- 6 Top Navigation Tabs:
+  1. Confession Diary (Main Menu): Users write private reflections locked in their browser with their personal Vault Passphrase so nobody else (not even admins) can read them.
+  2. Feeling Twin: Connects users 100% anonymously with another student experiencing the same mood right now so they can send kind encouragement notes without sharing diary text.
+  3. Music Therapy: Plays calming Piano Melodies, Spotify tracks, or YouTube streams in 3 gentle steps tailored to the user's mood. The music keeps playing continuously even when switching tabs!
+  4. Emotion Graphs: Maps feelings using Pleasantness (positive vs heavy) and Energy Level (calm vs tense) across the month.
+  5. 416k AI Model: Trained on 416,000+ real emotional reflections across 6 emotions (Sadness, Joy, Love, Anger, Fear, Surprise) with ~89% accuracy.
+  6. FAQ: Every question asked in this chatbot is automatically saved and restored onto the FAQ page, ranked by how often it is asked.
+- 18+ Policy & 2-Strike Ban: 18+ or sexually explicit confessions are strictly prohibited. 1st attempt is blocked with a serious red warning and the words are banned. 2nd attempt results in a permanent account ban.
+- User's Current Detected Mood on Dashboard: ${currentMood?.emotion ?? "joy"} (${currentMood?.quadrant ?? "High-Energy Pleasant"}).`;
+}
+
+function categorizeQuestion(query: string): string {
+  const q = query.toLowerCase();
+  if (/(18\+|ban|sexual|sex|porn|lucah|haram|rule|strike|attempt)/.test(q)) {
+    return "18+ Policy & Safety";
+  }
+  if (/(encrypt|e2ee|privacy|private|safe|passphrase|selamat|rahsia|kunci)/.test(q)) {
+    return "Privacy & Secret Diary";
+  }
+  if (/(graph|chart|circumplex|valence|arousal|graf|peta)/.test(q)) {
+    return "Emotion Graphs & Mood Map";
+  }
+  if (/(416k|ai|accuracy|model|train|detect|ketepatan)/.test(q)) {
+    return "How the AI Understands You";
+  }
+  if (/(twin|match|peer|anonymous|kawan|padanan)/.test(q)) {
+    return "Feeling Twin";
+  }
+  if (/(music|piano|spotify|youtube|song|lagu|muzik)/.test(q)) {
+    return "Music Therapy";
+  }
+  if (/(faq|restore|history|soalan)/.test(q)) {
+    return "FAQ & Chatbot";
+  }
+  if (/(breath|calm|stress|burnout|sad|anxious|tenang|penat|sedih)/.test(q)) {
+    return "Wellbeing & Calming Tips";
+  }
+  return "General Guide";
+}
+
+/**
+ * Calls Google Gemini API (using GEMINI_API_KEY or GOOGLE_API_KEY) if configured.
+ */
+async function tryAskGemini(
+  userMessage: string,
+  history: ChatTurnHistory[],
+  currentMood?: ChatMessageInput["currentMood"]
+): Promise<string | null> {
+  const apiKey = (
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    ""
+  ).trim();
+  if (!apiKey) return null;
+
+  const systemPrompt = buildKalbuSystemPrompt(currentMood);
+  const conversationContext = history
+    .slice(-6)
+    .map((h) => `${h.role === "user" ? "User" : "Kalbu AI"}: ${h.text}`)
+    .join("\n");
+
+  const fullInput = conversationContext
+    ? `${conversationContext}\nUser: ${userMessage}`
+    : userMessage;
+
+  // Try modern Interactions API (gemini-4-hydrogen) first, then fallback to generateContent
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/interactions?key=${encodeURIComponent(
+        apiKey
+      )}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gemini-4-hydrogen",
+          system_instruction: systemPrompt,
+          input: fullInput,
+        }),
+      }
+    );
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.output_text) return String(data.output_text).trim();
+    }
+  } catch {
+    // Fall through to standard REST endpoint
+  }
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
+        apiKey
+      )}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: systemPrompt }],
+          },
+          contents: [
+            ...history.slice(-6).map((h) => ({
+              role: h.role === "user" ? "user" : "model",
+              parts: [{ text: h.text }],
+            })),
+            {
+              role: "user",
+              parts: [{ text: userMessage }],
+            },
+          ],
+        }),
+      }
+    );
+
+    if (res.ok) {
+      const data = await res.json();
+      const text =
+        data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) return String(text).trim();
+    }
+  } catch (err) {
+    console.warn("[Kalbu Chat] Gemini API call warning:", err);
+  }
+
+  return null;
+}
+
+/**
+ * Calls OpenAI ChatGPT API (using OPENAI_API_KEY) if configured.
+ */
+async function tryAskOpenAiChatGpt(
+  userMessage: string,
+  history: ChatTurnHistory[],
+  currentMood?: ChatMessageInput["currentMood"]
+): Promise<string | null> {
+  const apiKey = (process.env.OPENAI_API_KEY || "").trim();
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: buildKalbuSystemPrompt(currentMood),
+          },
+          ...history.slice(-6).map((h) => ({
+            role: h.role,
+            content: h.text,
+          })),
+          {
+            role: "user",
+            content: userMessage,
+          },
+        ],
+        temperature: 0.7,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const text = data?.choices?.[0]?.message?.content;
+      if (text) return String(text).trim();
+    }
+  } catch (err) {
+    console.warn("[Kalbu Chat] OpenAI API call warning:", err);
+  }
+
+  return null;
 }
 
 let cachedWeights: Record<string, number[]> | null = null;
@@ -103,18 +296,15 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
       "sexual",
       "sex",
       "porn",
-      "police",
       "strike",
       "attempt",
       "warning",
       "rule",
       "rules",
       "lucah",
-      "polis",
       "sekat",
       "amaran",
       "haram",
-      "forensic",
     ],
     buildAnswer: (isMalay) =>
       isMalay
@@ -147,10 +337,6 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
       "security",
       "passphrase",
       "key",
-      "pbkdf2",
-      "aes",
-      "gcm",
-      "ciphertext",
       "vault",
       "lock",
       "unlock",
@@ -162,19 +348,12 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
     buildAnswer: (isMalay) =>
       isMalay
         ? `**Bagaimana Kalbu Merahsiakan Diari Anda:**\nSetiap luahan hati yang anda tulis dikunci dengan **kata laluan peribadi (Vault Passphrase)** anda sendiri sebelum ia disimpan:\n- **Hanya Anda Boleh Membacanya:** Diari anda ditukar menjadi kod rahsia yang tidak boleh dibaca oleh sesiapa pun (termasuk pemilik laman web).\n- **Cuba Uji Sendiri:** Jika anda menukar kata laluan di penjuru kanan atas kepada kata laluan yang salah, semua diari anda yang tersimpan akan terus terkunci sehingga anda memasukkan kata laluan asal anda semula!`
-        : `**How Kalbu Keeps Your Diary 100% Secret:**\nEverything you write is locked using your personal **Vault Passphrase** right inside your browser before it is saved:\n- **For Your Eyes Only:** Your words are scrambled into secret code so nobody else — not even the website admins or database — can read your confessions.\n- **Try Testing It:** If you type a different passphrase in the top-right box and click **Unlock Vault**, your saved entries immediately lock up until you enter your real passphrase again!`,
-    followUps: (isMalay) =>
-      isMalay
-        ? [
-            "Apa fungsi peta emosi (Emotion Graphs)?",
-            "Bagaimana Kalbu memilih lagu untuk mood saya?",
-            "Apa itu Feeling Twin?",
-          ]
-        : [
-            "How do the Emotion Graphs work?",
-            "How does Kalbu choose music for my mood?",
-            "What is a Feeling Twin?",
-          ],
+        : `**How Kalbu Keeps Your Diary 100% Secret:**\nEverything you write is locked using your personal **Vault Passphrase** right inside your browser before it is saved:\n- **For Your Eyes Only:** Your words are scrambled into secret code so nobody else — not even the website admins or database — can read your confessions.\n- **Try Testing It:** If you type a different passphrase in the top-right box and click **Unlock**, your saved entries immediately lock up until you enter your real passphrase again!`,
+    followUps: () => [
+      "How do the Emotion Graphs work?",
+      "How does Kalbu choose music for my mood?",
+      "What is a Feeling Twin?",
+    ],
   },
   {
     id: "circumplex-affect",
@@ -185,22 +364,16 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
       "valence",
       "arousal",
       "quadrant",
-      "quadrants",
-      "coordinates",
-      "2d",
-      "scatter",
-      "volatility",
-      "trajectory",
       "graph",
       "graphs",
       "chart",
       "graf",
-      "koordinat",
+      "peta",
     ],
     buildAnswer: (isMalay, mood) =>
       isMalay
-        ? `**Bagaimana Graf Emosi Kalbu Berfungsi:**\nKalbu memahami bahawa perasaan manusia bukan sekadar "gembira" atau "sedih" sahaja. Oleh itu, kami memetakan perasaan anda berdasarkan dua perkara mudah:\n1. **Tahap Kesenangan (Positif atau Negatif):** Sama ada perasaan itu menyenangkan atau menyakitkan.\n2. **Tahap Tenaga (Tenang atau Tegang):** Sama ada anda berasa letih/tenang ataupun berdebar/bertenaga.\n\nSekarang mood anda dikesan sebagai **${mood?.emotion ?? "joy"}**. Anda boleh klik tab **Emotion Graphs** di bar atas untuk melihat perubahan emosi harian anda sepanjang bulan ini!`
-        : `**How Kalbu's Emotion Graphs Work:**\nHuman feelings aren't just simple labels — sometimes you feel tired-sad, and other times you feel anxious-stressed. Kalbu maps your mood using two simple ideas:\n1. **Pleasantness (Valence):** How positive or heavy your mood feels.\n2. **Energy Level (Arousal):** Whether your mind feels calm/low-energy or tense/high-energy.\n\nRight now your mood is **${mood?.emotion ?? "joy"}**. Click the **Emotion Graphs** tab at the top bar to see your mood dots and how your feelings have changed over the month!`,
+        ? `**Bagaimana Graf Emosi Kalbu Berfungsi:**\nKalbu memetakan perasaan anda berdasarkan dua perkara mudah:\n1. **Tahap Kesenangan (Positif atau Berat):** Sama ada perasaan itu menyenangkan atau menyedihkan.\n2. **Tahap Tenaga (Tenang atau Tegang):** Sama ada anda berasa letih/tenang ataupun berdebar/bertenaga.\n\nSekarang mood anda dikesan sebagai **${mood?.emotion ?? "joy"}**. Anda boleh klik tab **Emotion Graphs** di bar atas untuk melihat perubahan emosi harian anda sepanjang bulan ini!`
+        : `**How Kalbu's Emotion Graphs Work:**\nHuman feelings aren't just simple labels. Kalbu maps your mood using two simple ideas:\n1. **Pleasantness:** How positive or heavy your mood feels.\n2. **Energy Level:** Whether your mind feels calm/low-energy or tense/high-energy.\n\nRight now your mood is **${mood?.emotion ?? "joy"}**. Click the **Emotion Graphs** tab at the top bar to see your mood dots and how your feelings have changed over the month!`,
     followUps: () => [
       "How does the AI detect my emotion from my writing?",
       "What is a Feeling Twin?",
@@ -213,24 +386,11 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
     keywords: [
       "416k",
       "dataset",
-      "csv",
       "accuracy",
       "model",
       "train",
       "trained",
-      "training",
-      "f1",
-      "precision",
-      "recall",
-      "confusion",
-      "matrix",
-      "split",
-      "validation",
-      "test",
-      "ngram",
-      "bigram",
-      "xai",
-      "explainable",
+      "ai",
       "ketepatan",
       "latihan",
     ],
@@ -250,14 +410,11 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
     keywords: [
       "twin",
       "feeling twin",
-      "cosine",
-      "similarity",
       "match",
       "matcher",
       "matching",
       "peer",
       "anonymous",
-      "pgvector",
       "solidarity",
       "kawan",
       "padanan",
@@ -287,7 +444,6 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
       "playlist",
       "audio",
       "sound",
-      "bpm",
       "play",
       "playing",
       "lagu",
@@ -307,17 +463,7 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
   {
     id: "faq-restoration",
     category: "FAQ & Chatbot",
-    keywords: [
-      "faq",
-      "frequently",
-      "restore",
-      "restored",
-      "history",
-      "save question",
-      "chatbot",
-      "soalan",
-      "sejarah",
-    ],
+    keywords: ["faq", "frequently", "restore", "restored", "history", "chatbot", "soalan"],
     buildAnswer: (isMalay) =>
       isMalay
         ? `**Bagaimana Halaman FAQ Berfungsi Dengan Chatbot Ini:**\nSetiap soalan yang anda tanya kepada saya di dalam chatbot ini akan **disimpan secara automatik** dan dipaparkan terus di halaman **FAQ** (boleh dibuka melalui butang **FAQ** pada bar di bahagian atas). Soalan yang paling kerap ditanya oleh pengguna akan disusun di bahagian paling atas supaya mudah dirujuk semula!`
@@ -332,22 +478,8 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
     id: "website-navigation",
     category: "Using the Website",
     keywords: [
-      "supabase",
-      "database",
-      "table",
-      "tables",
-      "sql",
-      "schema",
-      "postgres",
-      "postgresql",
-      "next",
-      "nextjs",
-      "tech stack",
-      "architecture",
-      "fyp",
       "kalbu",
       "meaning",
-      "creator",
       "navigation",
       "menu",
       "tabs",
@@ -379,14 +511,12 @@ const KNOWLEDGE_GRAPH: KnowledgeTopic[] = [
       "grounding",
       "exercise",
       "sleep",
-      "insomnia",
       "burnout",
       "overwhelmed",
       "panic",
       "deadline",
       "exam",
       "study",
-      "assignment",
       "lonely",
       "tenang",
       "nafas",
@@ -416,11 +546,10 @@ function adaptResponseToEveryQuestion(
   const cleanQ = query.trim();
   const qLower = cleanQ.toLowerCase();
   const isMalay =
-    /\b(apa|macam mana|bagaimana|kenapa|boleh|tolong|saya|aku|emosi|lagu|selamat|rahsia|penat|sedih|marah|takut|gembira|kawan|polis|haram|guna|maksud)\b/.test(
+    /\b(apa|macam mana|bagaimana|kenapa|boleh|tolong|saya|aku|emosi|lagu|selamat|rahsia|penat|sedih|marah|takut|gembira|kawan|haram|guna|maksud)\b/.test(
       qLower
     );
 
-  // 1. Score topics in the Knowledge Graph against the user's question
   const scoredTopics = KNOWLEDGE_GRAPH.map((topic) => {
     let score = 0;
     for (const kw of topic.keywords) {
@@ -451,7 +580,6 @@ function adaptResponseToEveryQuestion(
     };
   }
 
-  // 2. Conversational follow-up ("tell me more", "why", "example", "macam mana tu")
   const lastAssistantTurn = [...history]
     .reverse()
     .find((h) => h.role === "assistant");
@@ -479,8 +607,6 @@ function adaptResponseToEveryQuestion(
     }
   }
 
-  // 3. Open-Ended Question / Personal Reflection:
-  // Understand the emotional tone of the user's message and respond warmly in plain language!
   const questionAffect = analyzeQuestionAffect(cleanQ);
   const detectedEmotion = questionAffect.primaryEmotion;
 
@@ -566,22 +692,63 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = adaptResponseToEveryQuestion(
+    const history = body.history || [];
+
+    // Priority 1: Live Google Gemini API (GEMINI_API_KEY)
+    const geminiReply = await tryAskGemini(
       userMessage,
-      body.history || [],
+      history,
       body.currentMood
     );
+
+    // Priority 2: Live OpenAI ChatGPT API (OPENAI_API_KEY)
+    const openAiReply =
+      !geminiReply
+        ? await tryAskOpenAiChatGpt(userMessage, history, body.currentMood)
+        : null;
+
+    let finalReply: string;
+    let finalCategory: string;
+    let suggestedPrompts: string[];
+
+    if (geminiReply || openAiReply) {
+      finalReply = (geminiReply || openAiReply)!;
+      finalCategory = categorizeQuestion(userMessage);
+      suggestedPrompts = [
+        "Is my diary completely private?",
+        "How does Music Therapy help my mood?",
+        "What is a Feeling Twin?",
+        "What are the rules on 18+ confessions?",
+      ];
+    } else {
+      // Priority 3: Built-in Kalbu Knowledge & Affective Engine fallback
+      const fallback = adaptResponseToEveryQuestion(
+        userMessage,
+        history,
+        body.currentMood
+      );
+      finalReply = fallback.reply;
+      finalCategory = fallback.category;
+      suggestedPrompts = fallback.suggestedPrompts;
+    }
 
     // Automatically persist/restore every asked question into the FAQ database
     const updatedFaqs = recordQuestionToFaqStore(
       userMessage,
-      result.reply,
-      result.category
+      finalReply,
+      finalCategory
     );
 
     return NextResponse.json(
       {
-        ...result,
+        reply: finalReply,
+        category: finalCategory,
+        suggestedPrompts,
+        provider: geminiReply
+          ? "gemini"
+          : openAiReply
+          ? "chatgpt"
+          : "kalbu-knowledge-engine",
         faqs: updatedFaqs,
       },
       { status: 200 }

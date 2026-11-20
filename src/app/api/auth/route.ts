@@ -1,13 +1,15 @@
 // src/app/api/auth/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
 import { sendKalbuConfirmationEmail } from "@/lib/auth/smtp_mailer";
+import { createClient as createSupabaseServerClient } from "@/utils/supabase/server";
 
 export interface KalbuUserRecord {
-  uniqueEmailId: string; // Email is the unique primary ID in the database
-  id: string;
+  uniqueEmailId: string;
+  id: string; // Deterministic UUID derived from email for Supabase UUID columns
   email: string;
   password: string;
   anonymousHandle: string;
@@ -35,6 +37,21 @@ const USERS_DB_PATH = path.join(
 );
 const TMP_USERS_DB_PATH = path.join(os.tmpdir(), "kalbu_users_db.json");
 
+/**
+ * Generates a deterministic UUID v4-formatted string from an email address
+ * so every user email maps to a consistent UUID in Supabase tables.
+ */
+export function emailToDeterministicUuid(email: string): string {
+  const hash = crypto
+    .createHash("sha256")
+    .update(`kalbu-user:${email.trim().toLowerCase()}`)
+    .digest("hex");
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(
+    13,
+    16
+  )}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+
 function readUsersDb(): UsersDb {
   try {
     if (fs.existsSync(TMP_USERS_DB_PATH)) {
@@ -47,10 +64,9 @@ function readUsersDb(): UsersDb {
     console.warn("[Kalbu Auth] Could not read users_db.json:", err);
   }
   return {
-    description:
-      "Kalbu Registered Users Database (Email is the Unique Primary ID)",
+    description: "Kalbu Registered Users Database",
     businessSenderEmail:
-      process.env.KALBU_BUSINESS_EMAIL || "official.kalbu.sanctuary@gmail.com",
+      process.env.KALBU_BUSINESS_EMAIL || "kalbu4u@gmail.com",
     users: [],
   };
 }
@@ -61,13 +77,78 @@ function writeUsersDb(db: UsersDb) {
     fs.mkdirSync(path.dirname(USERS_DB_PATH), { recursive: true });
     fs.writeFileSync(USERS_DB_PATH, payload, "utf-8");
   } catch {
-    // Fallback to os.tmpdir() on serverless production hosts (e.g., Vercel)
     try {
       fs.writeFileSync(TMP_USERS_DB_PATH, payload, "utf-8");
     } catch (err) {
       console.warn("[Kalbu Auth] Could not write users_db.json:", err);
     }
   }
+}
+
+/**
+ * Syncs a user record directly to Supabase (`public.kalbu_users`) so every
+ * registration and email verification appears live in Supabase Table Editor!
+ */
+async function syncUserToSupabase(user: KalbuUserRecord) {
+  try {
+    const supabase = await createSupabaseServerClient();
+    await supabase.from("kalbu_users").upsert(
+      {
+        id: emailToDeterministicUuid(user.email),
+        email: user.email,
+        password_hash: user.password,
+        anonymous_handle: user.anonymousHandle,
+        agreed_to_terms: user.agreedToTerms,
+        agreed_to_terms_at: user.agreedToTermsAt,
+        email_verified: user.emailVerified,
+        email_verified_at: user.emailVerifiedAt,
+        verification_code: user.verificationCode,
+        created_at: user.createdAt,
+      },
+      { onConflict: "email" }
+    );
+  } catch (err) {
+    console.warn("[Kalbu Auth] Supabase sync note:", err);
+  }
+}
+
+/**
+ * Fetches a user by email from Supabase (`public.kalbu_users`) first,
+ * falling back to local `users_db.json` if the table hasn't been created yet.
+ */
+async function findUserByEmail(
+  email: string,
+  localDb: UsersDb
+): Promise<KalbuUserRecord | undefined> {
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data, error } = await supabase
+      .from("kalbu_users")
+      .select("*")
+      .eq("email", email.toLowerCase())
+      .maybeSingle();
+
+    if (!error && data) {
+      return {
+        uniqueEmailId: data.email,
+        id: data.id || emailToDeterministicUuid(data.email),
+        email: data.email,
+        password: data.password_hash,
+        anonymousHandle: data.anonymous_handle,
+        agreedToTerms: Boolean(data.agreed_to_terms),
+        agreedToTermsAt: data.agreed_to_terms_at,
+        emailVerified: Boolean(data.email_verified),
+        emailVerifiedAt: data.email_verified_at,
+        verificationCode: data.verification_code,
+        sentFromBusinessEmail:
+          process.env.KALBU_BUSINESS_EMAIL || "kalbu4u@gmail.com",
+        createdAt: data.created_at,
+      };
+    }
+  } catch {
+    // Fallback to localDb
+  }
+  return localDb.users.find((u) => u.email.toLowerCase() === email);
 }
 
 function generateSixDigitCode(): string {
@@ -79,32 +160,24 @@ export async function GET() {
   const businessEmail =
     process.env.KALBU_BUSINESS_EMAIL ||
     db.businessSenderEmail ||
-    "official.kalbu.sanctuary@gmail.com";
+    "kalbu4u@gmail.com";
   return NextResponse.json({ businessEmail }, { status: 200 });
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as {
-      action:
-        | "login"
-        | "register"
-        | "verify-email"
-        | "resend-code"
-        | "update-business-email";
+      action: "login" | "register" | "verify-email" | "resend-code";
       email?: string;
       password?: string;
       anonymousHandle?: string;
       agreedToTerms?: boolean;
       verificationCode?: string;
-      businessEmail?: string;
     };
 
     const db = readUsersDb();
-
     const activeBusinessEmail =
-      process.env.KALBU_BUSINESS_EMAIL || "official.kalbu.sanctuary@gmail.com";
-
+      process.env.KALBU_BUSINESS_EMAIL || "kalbu4u@gmail.com";
     const email = (body.email || "").trim().toLowerCase();
 
     if (!email || !email.includes("@")) {
@@ -119,7 +192,7 @@ export async function POST(req: NextRequest) {
     // =========================================================================
     if (body.action === "verify-email") {
       const code = (body.verificationCode || "").trim();
-      const user = db.users.find((u) => u.email.toLowerCase() === email);
+      const user = await findUserByEmail(email, db);
 
       if (!user) {
         return NextResponse.json(
@@ -141,13 +214,24 @@ export async function POST(req: NextRequest) {
       user.emailVerified = true;
       user.emailVerifiedAt = new Date().toISOString();
       user.verificationCode = null;
+
+      // Update local DB & Supabase
+      const localIdx = db.users.findIndex(
+        (u) => u.email.toLowerCase() === email
+      );
+      if (localIdx >= 0) {
+        db.users[localIdx] = user;
+      } else {
+        db.users.push(user);
+      }
       writeUsersDb(db);
+      await syncUserToSupabase(user);
 
       return NextResponse.json(
         {
           verified: true,
           user: {
-            id: user.email, // Email is the unique primary ID
+            id: emailToDeterministicUuid(user.email),
             uniqueEmailId: user.email,
             email: user.email,
             anonymousHandle: user.anonymousHandle,
@@ -163,7 +247,7 @@ export async function POST(req: NextRequest) {
     // ACTION 2: RESEND CONFIRMATION EMAIL FROM BUSINESS EMAIL
     // =========================================================================
     if (body.action === "resend-code") {
-      const user = db.users.find((u) => u.email.toLowerCase() === email);
+      const user = await findUserByEmail(email, db);
       if (!user) {
         return NextResponse.json(
           { error: "No account found for this email address." },
@@ -174,7 +258,17 @@ export async function POST(req: NextRequest) {
       const freshCode = generateSixDigitCode();
       user.verificationCode = freshCode;
       user.sentFromBusinessEmail = activeBusinessEmail;
+
+      const localIdx = db.users.findIndex(
+        (u) => u.email.toLowerCase() === email
+      );
+      if (localIdx >= 0) {
+        db.users[localIdx] = user;
+      } else {
+        db.users.push(user);
+      }
       writeUsersDb(db);
+      await syncUserToSupabase(user);
 
       const mailRes = await sendKalbuConfirmationEmail({
         toUserEmail: user.email,
@@ -204,7 +298,7 @@ export async function POST(req: NextRequest) {
     }
 
     // =========================================================================
-    // ACTION 3: REGISTER NEW USER -> SEND CONFIRMATION EMAIL FROM BUSINESS EMAIL
+    // ACTION 3: REGISTER NEW USER -> SAVE TO SUPABASE & SEND CONFIRMATION EMAIL
     // =========================================================================
     if (body.action === "register") {
       if (!body.agreedToTerms) {
@@ -217,7 +311,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const existing = db.users.find((u) => u.email.toLowerCase() === email);
+      const existing = await findUserByEmail(email, db);
       if (existing) {
         return NextResponse.json(
           {
@@ -233,10 +327,11 @@ export async function POST(req: NextRequest) {
         (body.anonymousHandle || "").trim() || `Serene Blossom #${randomNum}`;
       const nowIso = new Date().toISOString();
       const verificationCode = generateSixDigitCode();
+      const userUuid = emailToDeterministicUuid(email);
 
       const newUser: KalbuUserRecord = {
-        uniqueEmailId: email, // Email is the unique ID in the database
-        id: email,
+        uniqueEmailId: email,
+        id: userUuid,
         email,
         password,
         anonymousHandle: handle,
@@ -251,6 +346,7 @@ export async function POST(req: NextRequest) {
 
       db.users.push(newUser);
       writeUsersDb(db);
+      await syncUserToSupabase(newUser);
 
       const mailRes = await sendKalbuConfirmationEmail({
         toUserEmail: email,
@@ -272,9 +368,9 @@ export async function POST(req: NextRequest) {
     }
 
     // =========================================================================
-    // ACTION 4: LOGIN EXISTING REGISTERED USER
+    // ACTION 4: LOGIN EXISTING REGISTERED USER (FROM SUPABASE OR LOCAL DB)
     // =========================================================================
-    const found = db.users.find((u) => u.email.toLowerCase() === email);
+    const found = await findUserByEmail(email, db);
     if (!found || found.password !== password) {
       return NextResponse.json(
         {
@@ -285,11 +381,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // If user registered previously but hasn't confirmed their email yet, require email confirmation!
     if (found.emailVerified === false) {
       const freshCode = found.verificationCode || generateSixDigitCode();
       found.verificationCode = freshCode;
       writeUsersDb(db);
+      await syncUserToSupabase(found);
 
       const mailRes = await sendKalbuConfirmationEmail({
         toUserEmail: found.email,
@@ -313,7 +409,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         user: {
-          id: found.email, // Email is the unique primary ID
+          id: emailToDeterministicUuid(found.email),
           uniqueEmailId: found.email,
           email: found.email,
           anonymousHandle: found.anonymousHandle,
