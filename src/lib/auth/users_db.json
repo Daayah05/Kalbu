@@ -1,0 +1,20 @@
+{
+  "description": "Kalbu Registered Users Database",
+  "businessSenderEmail": "kalbu4u@gmail.com",
+  "users": [
+    {
+      "uniqueEmailId": "nurhidaayahbintimasri@gmail.com",
+      "id": "nurhidaayahbintimasri@gmail.com",
+      "email": "nurhidaayahbintimasri@gmail.com",
+      "password": "Nur_Daayah05",
+      "anonymousHandle": "Blue Roses",
+      "agreedToTerms": true,
+      "agreedToTermsAt": "2026-11-19T17:53:11.896Z",
+      "emailVerified": true,
+      "emailVerifiedAt": "2026-11-19T18:23:20.277Z",
+      "verificationCode": null,
+      "sentFromBusinessEmail": "kalbu4u@gmail.com",
+      "createdAt": "2026-11-19T17:53:11.896Z"
+    }
+  ]
+}

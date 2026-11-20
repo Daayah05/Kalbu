@@ -1,0 +1,65 @@
+[
+  {
+    "id": "faq-e2ee",
+    "question": "How does Kalbu keep my secret diary private?",
+    "answer": "Everything you write is locked using your personal Vault Passphrase right inside your browser before it is saved. Your words are scrambled into secret code so nobody else — not even the website admins — can read your confessions. If someone types the wrong passphrase at the top right, your saved entries stay locked.",
+    "category": "Privacy & Secret Diary",
+    "askedCount": 12,
+    "lastAskedAt": "2026-11-19T15:30:00Z",
+    "isUserSubmitted": false
+  },
+  {
+    "id": "faq-circumplex",
+    "question": "How do the Emotion Graphs work?",
+    "answer": "Human feelings aren't just simple labels. Kalbu maps your mood using two simple ideas: Pleasantness (how positive or heavy your mood feels) and Energy Level (whether your mind feels calm/low-energy or tense/high-energy). This lets you see your daily mood dots and how your feelings change over the month.",
+    "category": "Emotion Graphs & Mood Map",
+    "askedCount": 10,
+    "lastAskedAt": "2026-11-19T14:45:00Z",
+    "isUserSubmitted": false
+  },
+  {
+    "id": "faq-416k-model",
+    "question": "How does the AI detect my emotion from my writing?",
+    "answer": "Our AI learned from over 416,000 real emotional examples covering 6 main feelings: Sadness, Joy, Love, Anger, Fear/Anxiety, and Surprise (with ~89% accuracy). When you write a confession, it spots the key emotional words in your story so it can match you with the right therapeutic music and an anonymous Feeling Twin.",
+    "category": "How the AI Understands You",
+    "askedCount": 9,
+    "lastAskedAt": "2026-11-19T14:10:00Z",
+    "isUserSubmitted": false
+  },
+  {
+    "id": "faq-feeling-twin",
+    "question": "What is a 'Feeling Twin' and how does it work?",
+    "answer": "When you feel stressed or sad, it's easy to feel alone. Feeling Twin anonymously pairs you with another student who is experiencing the exact same mood as you right now. Neither of you ever sees the other person's real name or diary text, and you can send a quick anonymous note of encouragement.",
+    "category": "Feeling Twin",
+    "askedCount": 8,
+    "lastAskedAt": "2026-11-19T13:20:00Z",
+    "isUserSubmitted": false
+  },
+  {
+    "id": "faq-iso-music",
+    "question": "How does the Music Therapy choose songs for my mood?",
+    "answer": "When you feel anxious or sad, jumping straight into loud happy music often feels uncomfortable. Instead, Kalbu guides your mood gently in 3 steps: Step 1 matches your current feeling so you feel understood, Step 2 plays a warm piano bridge to ease tension, and Step 3 guides your mind into a calm, peaceful state. You can play Piano Melodies, Spotify, or YouTube — and the music keeps playing even when you switch pages!",
+    "category": "Music Therapy",
+    "askedCount": 7,
+    "lastAskedAt": "2026-11-19T12:50:00Z",
+    "isUserSubmitted": false
+  },
+  {
+    "id": "faq-18plus-policy",
+    "question": "What are the rules on 18+ or sexual confessions?",
+    "answer": "Kalbu is a safe emotional sanctuary, so 18+ or sexually explicit confessions are strictly prohibited. On the 1st attempt, your post is blocked, the inappropriate words are banned, and a serious red warning pops up. On the 2nd attempt, your account will be permanently banned from using the website.",
+    "category": "18+ Policy & Safety",
+    "askedCount": 6,
+    "lastAskedAt": "2026-11-19T12:00:00Z",
+    "isUserSubmitted": false
+  },
+  {
+    "id": "faq-user-1795107838678",
+    "question": "Why answer regarding monthly emotion trajectory in the FAQ is not updated?",
+    "answer": "How Kalbu's Emotion Graphs Work:\nHuman feelings aren't just simple labels — sometimes you feel tired-sad, and other times you feel anxious-stressed. Kalbu maps your mood using two simple ideas:\n1. Pleasantness (Valence): How positive or heavy your mood feels.\n2. Energy Level (Arousal): Whether your mind feels calm/low-energy or tense/high-energy.\n\nRight now your mood is fear. Click the Emotion Graphs tab at the top bar to see your mood dots and how your feelings have changed over the month!",
+    "category": "Emotion Graphs & Mood Map",
+    "askedCount": 1,
+    "lastAskedAt": "2026-11-19T17:03:58.677Z",
+    "isUserSubmitted": true
+  }
+]

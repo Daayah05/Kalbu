@@ -1,0 +1,115 @@
+{
+  "dataset": {
+    "source_file": "emotions.csv\\emotions.csv",
+    "raw_rows": 416809,
+    "clean_unique_rows": 393821,
+    "train_rows": 315055,
+    "validation_rows": 39379,
+    "test_rows": 39387,
+    "vocab_features": 136034,
+    "class_distribution": {
+      "sadness": 118510,
+      "joy": 135030,
+      "love": 29468,
+      "anger": 54777,
+      "fear": 43629,
+      "surprise": 12407
+    }
+  },
+  "metrics": {
+    "validation_accuracy": 0.8884,
+    "validation_macro_f1": 0.8579,
+    "test_accuracy": 0.8895,
+    "test_macro_f1": 0.8574,
+    "test_weighted_f1": 0.891,
+    "per_class": {
+      "sadness": {
+        "precision": 0.9365,
+        "recall": 0.9037,
+        "f1_score": 0.9198,
+        "support": 11851
+      },
+      "joy": {
+        "precision": 0.9466,
+        "recall": 0.8767,
+        "f1_score": 0.9103,
+        "support": 13503
+      },
+      "love": {
+        "precision": 0.735,
+        "recall": 0.9003,
+        "f1_score": 0.8093,
+        "support": 2948
+      },
+      "anger": {
+        "precision": 0.8682,
+        "recall": 0.8971,
+        "f1_score": 0.8824,
+        "support": 5479
+      },
+      "fear": {
+        "precision": 0.8185,
+        "recall": 0.8928,
+        "f1_score": 0.854,
+        "support": 4364
+      },
+      "surprise": {
+        "precision": 0.7219,
+        "recall": 0.8213,
+        "f1_score": 0.7684,
+        "support": 1242
+      }
+    },
+    "confusion_matrix": [
+      [
+        10710,
+        230,
+        173,
+        374,
+        288,
+        76
+      ],
+      [
+        343,
+        11838,
+        651,
+        231,
+        299,
+        141
+      ],
+      [
+        44,
+        186,
+        2654,
+        26,
+        26,
+        12
+      ],
+      [
+        191,
+        110,
+        73,
+        4915,
+        155,
+        35
+      ],
+      [
+        126,
+        77,
+        35,
+        101,
+        3896,
+        129
+      ],
+      [
+        22,
+        65,
+        25,
+        14,
+        96,
+        1020
+      ]
+    ]
+  },
+  "training_time_seconds": 70.92
+}

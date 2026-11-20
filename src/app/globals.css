@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+
+  /* Larger, comfortable typography scale across the entire website */
+  --text-xs: 0.925rem;
+  --text-xs--line-height: 1.45;
+  --text-sm: 1.05rem;
+  --text-sm--line-height: 1.55;
+  --text-base: 1.15rem;
+  --text-base--line-height: 1.6;
+  --text-lg: 1.3rem;
+  --text-lg--line-height: 1.5;
+  --text-xl: 1.5rem;
+  --text-xl--line-height: 1.4;
+  --text-2xl: 1.85rem;
+  --text-2xl--line-height: 1.35;
+
+  /* Soft Warm Cream, Porcelain & Espresso Palette inspired by the Kalbu Logo */
+  --color-white: #3d1c1c;
+
+  --color-slate-950: #fdf8f2; /* Logo background: Soft Warm Ivory Cream */
+  --color-slate-900: #fffdf9; /* Card surface: Pure Warm Porcelain */
+  --color-slate-800: #ead9c8; /* Soft Champagne/Almond border & subtle pill */
+  --color-slate-700: #dcc4ae; /* Warm Sand active border */
+  --color-slate-600: #b89882;
+  --color-slate-500: #9c7a6b; /* Soft Muted Taupe-Rose */
+  --color-slate-400: #7d584e; /* Warm Cocoa subtext */
+  --color-slate-300: #5e3832; /* Rich Rosewood secondary text */
+  --color-slate-200: #4a2422; /* Deep Espresso body text */
+  --color-slate-100: #3d1c1c; /* Deep Maroon-Espresso heading text */
+
+  /* Remap Indigo accents to the Logo's Warm Terracotta Rose & Soft Crimson */
+  --color-indigo-600: #c24646; /* Primary button crimson-rose */
+  --color-indigo-500: #d65a5a; /* Hover coral-rose */
+  --color-indigo-400: #b53d3d; /* Icon & label warm crimson */
+  --color-indigo-300: #9e2f2f; /* Badge text deep rose */
+  --color-indigo-200: #7d2222;
+
+  /* Soft Botanical Sage Green for E2EE / Success badges on cream background */
+  --color-emerald-600: #3b7a57;
+  --color-emerald-500: #4a8c66;
+  --color-emerald-400: #2f6f4e;
+  --color-emerald-300: #245c3f;
+  --color-emerald-200: #1d4d34;
+  --color-emerald-950: #e8f4ec;
+
+  /* Warm Champagne Gold / Honey accents (matching the logo's gold ring & stars) */
+  --color-amber-400: #b07824;
+  --color-amber-300: #966216;
+
+  /* Soft Blush / Berry Rose accents */
+  --color-rose-600: #c9465b;
+  --color-rose-500: #d9596e;
+  --color-rose-400: #b8374d;
+  --color-rose-300: #9e283c;
+
+  /* Soft Sky Blue for low-energy quadrant badges */
+  --color-sky-400: #3a7ca5;
+}
+
+body {
+  background-color: #fdf8f2;
+  background-image: radial-gradient(
+      at 12% 8%,
+      rgba(235, 148, 148, 0.18) 0px,
+      transparent 50%
+    ),
+    radial-gradient(
+      at 88% 92%,
+      rgba(214, 178, 132, 0.22) 0px,
+      transparent 55%
+    );
+  color: #3d1c1c;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    sans-serif;
+}
+
+/* Scale up micro badge text classes so no text is ever too small */
+.text-\[10px\] {
+  font-size: 0.82rem !important;
+  line-height: 1.35 !important;
+}
+
+.text-\[11px\] {
+  font-size: 0.88rem !important;
+  line-height: 1.4 !important;
+}
+
+/* Keep solid action buttons crisp ivory-white text */
+.bg-indigo-600,
+.bg-emerald-600,
+.bg-rose-600 {
+  color: #fffdf9 !important;
+}
