@@ -161,6 +161,7 @@ const NAV_ITEMS: Array<{
 ];
 
 export default function KalbuDashboardPage() {
+  const [isHydrated, setIsHydrated] = useState(false);
   const [authUser, setAuthUser] = useState<AuthenticatedKalbuUser | null>(null);
   const [activeTab, setActiveTab] = useState<ActivityTab>("confession");
   const [playingTrackTitle, setPlayingTrackTitle] = useState<string | null>(
@@ -243,6 +244,8 @@ export default function KalbuDashboardPage() {
         }
       } catch (e) {
         console.warn("[Kalbu Vault] Could not restore local vault:", e);
+      } finally {
+        setIsHydrated(true);
       }
     }
     initVault();
@@ -349,6 +352,10 @@ export default function KalbuDashboardPage() {
 
   const latestRecord = records[records.length - 1];
   const hasLockedEntries = vaultEntries.some((v) => v.decryptError);
+
+  if (!isHydrated) {
+    return <div className="min-h-screen bg-slate-950" />;
+  }
 
   if (!authUser) {
     return <KalbuAuthGate onAuthenticated={handleUserAuthenticated} />;
