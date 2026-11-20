@@ -220,6 +220,18 @@ export default function KalbuDashboardPage() {
           if (parsedUser && parsedUser.email) {
             setAuthUser(parsedUser);
             setUserId(parsedUser.id);
+            // Automatically sync any previously registered session into Supabase kalbu_users
+            fetch("/api/auth", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "sync-session",
+                email: parsedUser.email,
+                password: parsedUser.passphrase,
+                anonymousHandle: parsedUser.anonymousHandle,
+                agreedToTermsAt: parsedUser.agreedToTermsAt,
+              }),
+            }).catch(() => {});
           }
         }
 

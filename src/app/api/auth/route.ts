@@ -167,11 +167,17 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as {
-      action: "login" | "register" | "verify-email" | "resend-code";
+      action:
+        | "login"
+        | "register"
+        | "verify-email"
+        | "resend-code"
+        | "sync-session";
       email?: string;
       password?: string;
       anonymousHandle?: string;
       agreedToTerms?: boolean;
+      agreedToTermsAt?: string;
       verificationCode?: string;
     };
 
@@ -185,6 +191,30 @@ export async function POST(req: NextRequest) {
         { error: "Please enter a valid email address." },
         { status: 400 }
       );
+    }
+
+    // =========================================================================
+    // ACTION 0: AUTO-SYNC EXISTING BROWSER SESSION TO SUPABASE (FOR EARLIER USERS)
+    // =========================================================================
+    if (body.action === "sync-session") {
+      const existing = await findUserByEmail(email, db);
+      const nowIso = new Date().toISOString();
+      const syncedUser: KalbuUserRecord = existing || {
+        uniqueEmailId: email,
+        id: emailToDeterministicUuid(email),
+        email,
+        password: (body.password || "synced-session").trim(),
+        anonymousHandle: (body.anonymousHandle || "Kalbu Member").trim(),
+        agreedToTerms: true,
+        agreedToTermsAt: body.agreedToTermsAt || nowIso,
+        emailVerified: true,
+        emailVerifiedAt: nowIso,
+        verificationCode: null,
+        sentFromBusinessEmail: activeBusinessEmail,
+        createdAt: body.agreedToTermsAt || nowIso,
+      };
+      await syncUserToSupabase(syncedUser);
+      return NextResponse.json({ synced: true }, { status: 200 });
     }
 
     // =========================================================================
