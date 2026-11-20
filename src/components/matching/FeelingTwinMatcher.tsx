@@ -179,10 +179,27 @@ export default function FeelingTwinMatcher({
     }
   }
 
-  function handleSendSupport(message: string) {
-    if (!message.trim()) return;
-    setSentPulses((prev) => [message.trim(), ...prev.slice(0, 3)]);
+  async function handleSendSupport(message: string) {
+    const cleanMsg = message.trim();
+    if (!cleanMsg) return;
+    setSentPulses((prev) => [cleanMsg, ...prev.slice(0, 3)]);
     setCustomPulse("");
+
+    // Synchronize anonymous solidarity note to Supabase dataset
+    if (isSupabaseConfigured() && activeTwin && latestRecord) {
+      try {
+        const supabase = createClient();
+        await supabase.from("feeling_twin_messages").insert({
+          sender_id: userId,
+          recipient_handle: activeTwin.handle,
+          shared_emotion: latestRecord.primary_emotion,
+          similarity_score: activeTwin.similarity,
+          message: cleanMsg,
+        });
+      } catch {
+        // Ignore if table not created yet
+      }
+    }
   }
 
   const activeTwin =

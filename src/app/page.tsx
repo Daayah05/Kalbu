@@ -43,6 +43,7 @@ import {
   CIRCUMPLEX_ANCHORS,
   EmotionRecordItem,
 } from "@/lib/ai/circumplex";
+import { createClient, isSupabaseConfigured } from "@/utils/supabase/client";
 
 type ActivityTab =
   | "confession"
@@ -252,6 +253,53 @@ export default function KalbuDashboardPage() {
           ) as SavedEncryptedEntry[];
           if (Array.isArray(parsedVault) && parsedVault.length > 0) {
             await decryptVaultList(parsedVault, key);
+
+            // Retroactively synchronize any local browser diary entries & emotion vectors to Supabase
+            if (isSupabaseConfigured()) {
+              const supabase = createClient();
+              const activeUid =
+                (savedSessionJson
+                  ? (JSON.parse(savedSessionJson) as AuthenticatedKalbuUser)
+                      .email
+                  : null) || userId;
+
+              for (const item of parsedVault) {
+                try {
+                  const { data: entryRow } = await supabase
+                    .from("encrypted_diary_entries")
+                    .upsert(
+                      {
+                        id: item.id,
+                        user_id: activeUid,
+                        ciphertext: item.encrypted.ciphertext,
+                        iv: item.encrypted.iv,
+                        word_count: item.wordCount,
+                        recorded_at: item.recordedAt,
+                      },
+                      { onConflict: "id" }
+                    )
+                    .select("id")
+                    .maybeSingle();
+
+                  const targetEntryId = entryRow?.id || item.id;
+                  await supabase.from("emotion_vectors").upsert(
+                    {
+                      entry_id: targetEntryId,
+                      user_id: activeUid,
+                      primary_emotion: item.circumplex.primaryEmotion,
+                      confidence: item.circumplex.confidence,
+                      valence: item.circumplex.valence,
+                      arousal: item.circumplex.arousal,
+                      emotion_probs: `[${item.circumplex.vector6D.join(",")}]`,
+                      recorded_at: item.recordedAt,
+                    },
+                    { onConflict: "entry_id" }
+                  );
+                } catch {
+                  // Ignore individual sync error if table not migrated yet
+                }
+              }
+            }
           }
         }
       } catch (e) {

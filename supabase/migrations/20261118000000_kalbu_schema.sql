@@ -1,6 +1,6 @@
 -- ============================================================
--- Kalbu — Full-Stack Database Schema & pgvector Migration
--- Run this script in your Supabase Dashboard -> SQL Editor
+-- Kalbu — Full-Stack Database Schema & Live Dataset Sync
+-- Copy & Run this entire script in Supabase Dashboard -> SQL Editor
 -- ============================================================
 
 -- 1. Enable required extensions
@@ -26,7 +26,6 @@ END $$;
 
 -- ============================================================
 -- TABLE 1: kalbu_users (Registered Users & Email Verification)
--- Every friend/user who registers appears directly in this table!
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.kalbu_users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -46,7 +45,7 @@ CREATE TABLE IF NOT EXISTS public.kalbu_users (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.encrypted_diary_entries (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL,
+  user_id TEXT NOT NULL,
   ciphertext TEXT NOT NULL,
   iv TEXT NOT NULL,
   auth_tag TEXT,
@@ -55,16 +54,22 @@ CREATE TABLE IF NOT EXISTS public.encrypted_diary_entries (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Ensure user_id accepts both email and UUID strings seamlessly
+ALTER TABLE public.encrypted_diary_entries
+  DROP CONSTRAINT IF EXISTS encrypted_diary_entries_user_id_fkey;
+ALTER TABLE public.encrypted_diary_entries
+  ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_diary_user_recorded
   ON public.encrypted_diary_entries(user_id, recorded_at DESC);
 
 -- ============================================================
--- TABLE 3: emotion_vectors (Russell's Circumplex & 6D Vector)
+-- TABLE 3: emotion_vectors (AI Emotion Dataset & Circumplex)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.emotion_vectors (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   entry_id UUID NOT NULL UNIQUE REFERENCES public.encrypted_diary_entries(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL,
+  user_id TEXT NOT NULL,
   primary_emotion emotion_label NOT NULL,
   confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
   valence REAL NOT NULL CHECK (valence >= -1.0 AND valence <= 1.0),
@@ -81,6 +86,11 @@ CREATE TABLE IF NOT EXISTS public.emotion_vectors (
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE public.emotion_vectors
+  DROP CONSTRAINT IF EXISTS emotion_vectors_user_id_fkey;
+ALTER TABLE public.emotion_vectors
+  ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_emotion_user_date
   ON public.emotion_vectors(user_id, recorded_at DESC);
 
@@ -89,24 +99,60 @@ CREATE INDEX IF NOT EXISTS idx_emotion_user_date
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.matching_pool (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL UNIQUE,
-  emotion_vector_id UUID NOT NULL REFERENCES public.emotion_vectors(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL UNIQUE,
+  anonymous_handle TEXT DEFAULT 'Anonymous Student',
+  emotion_vector_id UUID REFERENCES public.emotion_vectors(id) ON DELETE CASCADE,
   emotion_probs vector(6) NOT NULL,
   valence REAL NOT NULL,
   arousal REAL NOT NULL,
   primary_emotion emotion_label NOT NULL,
   status match_status NOT NULL DEFAULT 'searching',
-  matched_with_user_id UUID,
+  matched_with_user_id TEXT,
   room_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '15 minutes')
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours')
 );
+
+ALTER TABLE public.matching_pool
+  DROP CONSTRAINT IF EXISTS matching_pool_user_id_fkey;
+ALTER TABLE public.matching_pool
+  DROP CONSTRAINT IF EXISTS matching_pool_matched_with_user_id_fkey;
+ALTER TABLE public.matching_pool
+  ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT;
+ALTER TABLE public.matching_pool
+  ADD COLUMN IF NOT EXISTS anonymous_handle TEXT DEFAULT 'Anonymous Student';
 
 CREATE INDEX IF NOT EXISTS idx_matching_pool_vector
   ON public.matching_pool USING hnsw (emotion_probs vector_cosine_ops);
 
 -- ============================================================
--- TABLE 5: music_mapping (ISO Principle Music Therapy Catalog)
+-- TABLE 5: feeling_twin_messages (Anonymous Solidarity Notes)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.feeling_twin_messages (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  sender_id TEXT NOT NULL,
+  recipient_handle TEXT NOT NULL,
+  shared_emotion TEXT NOT NULL,
+  similarity_score REAL,
+  message TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- TABLE 6: faq_questions (Chatbot Questions & Answers Dataset)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.faq_questions (
+  id TEXT PRIMARY KEY,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'General Guide',
+  asked_count INTEGER NOT NULL DEFAULT 1,
+  is_user_submitted BOOLEAN NOT NULL DEFAULT true,
+  last_asked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- TABLE 7: music_mapping (ISO Principle Music Therapy Catalog)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.music_mapping (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -125,7 +171,7 @@ CREATE TABLE IF NOT EXISTS public.music_mapping (
 );
 
 -- ============================================================
--- TABLE 6: banned_words_registry (18+ / Explicit Terms Database)
+-- TABLE 8: banned_words_registry (18+ / Explicit Terms Database)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.banned_words_registry (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -136,7 +182,7 @@ CREATE TABLE IF NOT EXISTS public.banned_words_registry (
 );
 
 -- ============================================================
--- TABLE 7: restricted_incident_logs (18+ Violation Backup DB)
+-- TABLE 9: restricted_incident_logs (18+ Violation Backup DB)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS public.restricted_incident_logs (
   incident_id TEXT PRIMARY KEY,
@@ -154,50 +200,14 @@ CREATE TABLE IF NOT EXISTS public.restricted_incident_logs (
 );
 
 -- ============================================================
--- RPC FUNCTION: Find "Feeling Twin" via Cosine Similarity
--- ============================================================
-CREATE OR REPLACE FUNCTION public.find_feeling_twin(
-  p_user_id UUID,
-  p_query_vector vector(6),
-  p_valence REAL,
-  p_arousal REAL,
-  p_similarity_threshold REAL DEFAULT 0.75
-)
-RETURNS TABLE (
-  twin_pool_id UUID,
-  twin_user_id UUID,
-  twin_emotion emotion_label,
-  cosine_similarity REAL,
-  circumplex_distance REAL
-)
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-  RETURN QUERY
-  SELECT
-    mp.id AS twin_pool_id,
-    mp.user_id AS twin_user_id,
-    mp.primary_emotion AS twin_emotion,
-    (1 - (mp.emotion_probs <=> p_query_vector))::REAL AS cosine_similarity,
-    sqrt(power(mp.valence - p_valence, 2) + power(mp.arousal - p_arousal, 2))::REAL AS circumplex_distance
-  FROM public.matching_pool mp
-  WHERE mp.user_id <> p_user_id
-    AND mp.status = 'searching'
-    AND mp.expires_at > NOW()
-    AND (1 - (mp.emotion_probs <=> p_query_vector)) >= p_similarity_threshold
-  ORDER BY (mp.emotion_probs <=> p_query_vector) ASC, circumplex_distance ASC
-  LIMIT 1;
-END;
-$$;
-
--- ============================================================
--- ROW LEVEL SECURITY (RLS) POLICIES FOR KALBU APP ACCESS
+-- ROW LEVEL SECURITY (RLS) POLICIES FOR FULL APP SYNC
 -- ============================================================
 ALTER TABLE public.kalbu_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.encrypted_diary_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.emotion_vectors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.matching_pool ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.feeling_twin_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.faq_questions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.music_mapping ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.banned_words_registry ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.restricted_incident_logs ENABLE ROW LEVEL SECURITY;
@@ -216,6 +226,14 @@ CREATE POLICY "Allow app access to emotion_vectors" ON public.emotion_vectors
 
 DROP POLICY IF EXISTS "Allow app access to matching_pool" ON public.matching_pool;
 CREATE POLICY "Allow app access to matching_pool" ON public.matching_pool
+  FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow app access to feeling_twin_messages" ON public.feeling_twin_messages;
+CREATE POLICY "Allow app access to feeling_twin_messages" ON public.feeling_twin_messages
+  FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow app access to faq_questions" ON public.faq_questions;
+CREATE POLICY "Allow app access to faq_questions" ON public.faq_questions
   FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow app access to music_mapping" ON public.music_mapping;

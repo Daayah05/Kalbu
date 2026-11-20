@@ -1,7 +1,9 @@
 // src/app/api/moderation/check-confession/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
+import os from "os";
 import path from "path";
+import { createClient as createSupabaseServerClient } from "@/utils/supabase/server";
 
 const BANNED_WORDS_PATH = path.join(
   process.cwd(),
@@ -251,11 +253,46 @@ export async function POST(req: NextRequest) {
         JSON.stringify(evidenceDb, null, 2),
         "utf-8"
       );
-    } catch (e) {
-      console.warn(
-        "[Kalbu Moderation] Failed to write forensic evidence DB:",
-        e
-      );
+    } catch {
+      try {
+        fs.writeFileSync(
+          path.join(os.tmpdir(), "kalbu_restricted_evidence_db.json"),
+          JSON.stringify(evidenceDb, null, 2),
+          "utf-8"
+        );
+      } catch (e) {
+        console.warn("[Kalbu Moderation] Failed to write evidence DB:", e);
+      }
+    }
+
+    // Sync 18+ violation incident and newly banned words directly to Supabase
+    try {
+      const supabase = await createSupabaseServerClient();
+      await supabase.from("restricted_incident_logs").insert({
+        incident_id: incidentId,
+        user_id: userId,
+        ip_address: ipAddress,
+        user_agent: userAgent,
+        strike_number: currentStrikes,
+        action_taken: forensicEntry.actionTaken,
+        flagged_keywords: forensicEntry.flaggedKeywords,
+        raw_title: rawTitle,
+        raw_content: rawContent,
+        created_at: nowIso,
+      });
+
+      if (newlyBannedContextWords.length > 0) {
+        await supabase.from("banned_words_registry").upsert(
+          newlyBannedContextWords.map((term) => ({
+            banned_term: term,
+            category: "18+_sexual_explicit",
+            auto_added_from_violation: true,
+          })),
+          { onConflict: "banned_term" }
+        );
+      }
+    } catch {
+      // Ignore if Supabase table not migrated yet
     }
 
     return NextResponse.json(

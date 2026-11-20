@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { createClient as createSupabaseServerClient } from "@/utils/supabase/server";
 
 export interface FaqEntry {
   id: string;
@@ -41,6 +42,26 @@ export function readFaqStore(): FaqEntry[] {
   return [];
 }
 
+export async function syncFaqEntryToSupabase(entry: FaqEntry) {
+  try {
+    const supabase = await createSupabaseServerClient();
+    await supabase.from("faq_questions").upsert(
+      {
+        id: entry.id,
+        question: entry.question,
+        answer: entry.answer,
+        category: entry.category,
+        asked_count: entry.askedCount,
+        is_user_submitted: Boolean(entry.isUserSubmitted),
+        last_asked_at: entry.lastAskedAt,
+      },
+      { onConflict: "id" }
+    );
+  } catch {
+    // Ignore if table not migrated yet
+  }
+}
+
 export function recordQuestionToFaqStore(
   question: string,
   answer: string,
@@ -52,7 +73,6 @@ export function recordQuestionToFaqStore(
   const entries = readFaqStore();
   const normQ = cleanQ.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
 
-  // Check if a matching question already exists
   const existing = entries.find((item) => {
     const normExisting = item.question
       .toLowerCase()
@@ -66,12 +86,14 @@ export function recordQuestionToFaqStore(
   });
 
   const nowIso = new Date().toISOString();
+  let targetEntry: FaqEntry;
 
   if (existing) {
     existing.askedCount += 1;
     existing.lastAskedAt = nowIso;
+    targetEntry = existing;
   } else {
-    entries.push({
+    targetEntry = {
       id: `faq-user-${Date.now()}`,
       question: cleanQ,
       answer: answer.replace(/\*\*/g, ""),
@@ -79,8 +101,12 @@ export function recordQuestionToFaqStore(
       askedCount: 1,
       lastAskedAt: nowIso,
       isUserSubmitted: true,
-    });
+    };
+    entries.push(targetEntry);
   }
+
+  // Fire-and-forget sync to Supabase faq_questions table
+  syncFaqEntryToSupabase(targetEntry).catch(() => {});
 
   const sorted = entries.sort((a, b) => b.askedCount - a.askedCount);
 
@@ -100,6 +126,37 @@ export function recordQuestionToFaqStore(
 }
 
 export async function GET() {
-  const faqs = readFaqStore();
-  return NextResponse.json({ faqs }, { status: 200 });
+  const localFaqs = readFaqStore();
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data, error } = await supabase
+      .from("faq_questions")
+      .select("*")
+      .order("asked_count", { ascending: false });
+
+    if (!error && Array.isArray(data) && data.length > 0) {
+      const mergedMap = new Map<string, FaqEntry>();
+      for (const item of localFaqs) {
+        mergedMap.set(item.question.toLowerCase(), item);
+      }
+      for (const row of data) {
+        mergedMap.set(String(row.question).toLowerCase(), {
+          id: row.id,
+          question: row.question,
+          answer: row.answer,
+          category: row.category,
+          askedCount: Number(row.asked_count || 1),
+          lastAskedAt: row.last_asked_at,
+          isUserSubmitted: Boolean(row.is_user_submitted),
+        });
+      }
+      const merged = Array.from(mergedMap.values()).sort(
+        (a, b) => b.askedCount - a.askedCount
+      );
+      return NextResponse.json({ faqs: merged }, { status: 200 });
+    }
+  } catch {
+    // Fallback to localFaqs
+  }
+  return NextResponse.json({ faqs: localFaqs }, { status: 200 });
 }
